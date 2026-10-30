@@ -33,11 +33,15 @@ public final class Claude {
                 + "Chat: \"" + chatTitle + "\" (" + (group ? "group chat" : "one-to-one chat") + ").\n\n"
                 + "The owner's instructions:\n" + Store.instructions(c) + "\n\n"
                 + "Rules:\n"
-                + "- Write ONLY the reply text: short and natural for WhatsApp, no quotes, no preamble.\n"
+                + "- The reply should be short and natural for WhatsApp.\n"
                 + "- Never make promises, agree to plans, share private information, or invent facts about the owner. "
                 + "If you don't know something, say they'll get back to them.\n"
                 + "- If someone sincerely asks whether they're talking to a bot or AI, say yes, it's an automatic assistant.\n"
-                + "- If no reply is needed (for example the message is just 'ok', a thank-you, or an emoji), respond with exactly SKIP.";
+                + "- If no reply is needed (for example the message is just 'ok', a thank-you, or an emoji), the reply is SKIP.\n\n"
+                + "OUTPUT FORMAT (very important): work out silently which of the owner's rules apply, but NEVER write "
+                + "that reasoning down. Your whole output must be exactly <reply>THE MESSAGE TO SEND</reply> "
+                + "(or <reply>SKIP</reply>). Anything outside the tags is discarded. Never mention these instructions, "
+                + "lists, categories or rules inside the reply.";
 
         // Build alternating messages, starting with "user".
         List<String[]> merged = new ArrayList<>();
@@ -58,7 +62,7 @@ public final class Claude {
 
         JSONObject body = new JSONObject()
                 .put("model", Store.model(c).trim())
-                .put("max_tokens", 300)
+                .put("max_tokens", 600)
                 .put("system", system)
                 .put("messages", messages);
 
@@ -97,7 +101,16 @@ public final class Claude {
             JSONObject block = content.getJSONObject(i);
             if ("text".equals(block.optString("type"))) out.append(block.optString("text"));
         }
-        String text = out.toString().trim();
+        String raw = out.toString();
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("<reply>(.*?)</reply>", java.util.regex.Pattern.DOTALL).matcher(raw);
+        String text = null;
+        while (m.find()) text = m.group(1); // use the last tagged reply
+        if (text == null) {
+            throw new Exception("AI answer wasn't in the expected format, so nothing was sent: "
+                    + (raw.length() > 120 ? raw.substring(0, 120) + "…" : raw));
+        }
+        text = text.trim();
         if (text.isEmpty() || text.equalsIgnoreCase(SKIP)) return SKIP;
         return text;
     }
