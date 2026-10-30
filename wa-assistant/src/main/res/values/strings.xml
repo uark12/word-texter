@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">WA Assistant</string>
+    <string name="a11y_desc">Lets WA Assistant press Send in WhatsApp for your scheduled messages. It only acts on WhatsApp and WhatsApp Business.</string>
+</resources>
