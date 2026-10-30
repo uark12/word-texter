@@ -188,11 +188,33 @@ public class MainActivity extends Activity {
         max.setInputType(InputType.TYPE_CLASS_NUMBER);
         content.addView(max);
 
+        content.addView(label("Wait before replying, so it doesn't look instant (seconds)"));
+        LinearLayout delays = new LinearLayout(this);
+        EditText dMin = edit(String.valueOf(Store.delayMin(this)), "min");
+        EditText dMax = edit(String.valueOf(Store.delayMax(this)), "max");
+        dMin.setInputType(InputType.TYPE_CLASS_NUMBER);
+        dMax.setInputType(InputType.TYPE_CLASS_NUMBER);
+        TextView minTxt = new TextView(this);
+        minTxt.setText("between ");
+        TextView toTxt = new TextView(this);
+        toTxt.setText("  and  ");
+        delays.addView(minTxt);
+        delays.addView(dMin, weight());
+        delays.addView(toTxt);
+        delays.addView(dMax, weight());
+        content.addView(delays);
+        content.addView(note("It picks a random time in this range for each reply. If they send more messages while "
+                + "it's waiting, it waits again and then answers them all in one reply. Use 0 and 0 to reply instantly."));
+
         Runnable save = () -> {
             int modeVal = mode.getCheckedRadioButtonId() == 101 ? Store.MODE_ONLY
                     : mode.getCheckedRadioButtonId() == 102 ? Store.MODE_EXCEPT : Store.MODE_ALL;
             int maxVal;
             try { maxVal = Integer.parseInt(max.getText().toString().trim()); } catch (Exception e) { maxVal = 3; }
+            int minD, maxD;
+            try { minD = Integer.parseInt(dMin.getText().toString().trim()); } catch (Exception e) { minD = 60; }
+            try { maxD = Integer.parseInt(dMax.getText().toString().trim()); } catch (Exception e) { maxD = 240; }
+            if (maxD < minD) { int t = minD; minD = maxD; maxD = t; }
             Store.prefs(this).edit()
                     .putString("api_key", key.getText().toString().trim())
                     .putString("model", model.getText().toString().trim().isEmpty()
@@ -205,6 +227,8 @@ public class MainActivity extends Activity {
                     .putString("from", from.getText().toString().trim())
                     .putString("to", to.getText().toString().trim())
                     .putInt("max_hour", maxVal)
+                    .putInt("delay_min", minD)
+                    .putInt("delay_max", maxD)
                     .apply();
         };
 

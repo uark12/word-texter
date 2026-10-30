@@ -19,13 +19,18 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.concurrent.ExecutorService;
+import java.util.Random;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
 /** Watches WhatsApp notifications and replies with Claude through the notification's Reply action. */
 public class ReplyListener extends NotificationListenerService {
 
-    private static final ExecutorService worker = Executors.newSingleThreadExecutor();
+    private static final ScheduledExecutorService worker = Executors.newSingleThreadScheduledExecutor();
+    private static final Map<String, ScheduledFuture<?>> pending = new HashMap<>();
+    private static final Random random = new Random();
     private static final LinkedHashSet<String> seen = new LinkedHashSet<>();
     private static final Map<String, List<Long>> replyTimes = new HashMap<>();
     private static final Map<String, String> lastSent = new HashMap<>();
@@ -83,7 +88,8 @@ public class ReplyListener extends NotificationListenerService {
             lastText = str(ex.getCharSequence(Notification.EXTRA_TEXT));
             history.add(new String[]{"user", lastText});
         }
-        if (lastText.isEmpty() || lastFromMe) return;
+        if (lastFromMe) { cancelPending(title, "you replied yourself"); return; }
+        if (lastText.isEmpty()) return;
         if (lastText.equals(lastSent.get(title))) return; // our own reply echoed back
 
         String dedupKey = pkg + "|" + title + "|" + lastText + "|" + lastTime;
@@ -107,7 +113,13 @@ public class ReplyListener extends NotificationListenerService {
         final boolean isGroup = group;
         final Notification.Action action = replyAction;
         final Context ctx = getApplicationContext();
-        worker.execute(() -> {
+        int lo = Math.max(0, Store.delayMin(this));
+        int hi = Math.max(lo, Store.delayMax(this));
+        int delaySec = lo + (hi > lo ? random.nextInt(hi - lo + 1) : 0);
+
+        Runnable task = () -> {
+            synchronized (pending) { pending.remove(chat); }
+            if (!Store.autoEnabled(ctx)) return;
             try {
                 String reply = Claude.reply(ctx, chat, isGroup, history);
                 if (Claude.SKIP.equals(reply)) {
@@ -122,7 +134,34 @@ public class ReplyListener extends NotificationListenerService {
             } catch (Exception e) {
                 Store.log(ctx, "Couldn't reply to " + chat + ": " + e.getMessage());
             }
-        });
+        };
+
+        synchronized (pending) {
+            // A newer message in the same chat restarts the wait, so it replies once to everything.
+            ScheduledFuture<?> old = pending.remove(chat);
+            if (old != null) old.cancel(false);
+            pending.put(chat, worker.schedule(task, delaySec, TimeUnit.SECONDS));
+        }
+        if (delaySec > 0) Store.log(this, "Will reply to " + chat + " in about " + delaySec + "s");
+    }
+
+    @Override
+    public void onNotificationRemoved(StatusBarNotification sbn, RankingMap rankingMap, int reason) {
+        String pkg = sbn.getPackageName();
+        if (!Store.WA.equals(pkg) && !Store.WA_BUSINESS.equals(pkg)) return;
+        if (reason != REASON_CLICK && reason != REASON_APP_CANCEL) return;
+        Notification n = sbn.getNotification();
+        if (n == null) return;
+        String title = str(n.extras.getCharSequence(Notification.EXTRA_CONVERSATION_TITLE));
+        if (title.isEmpty()) title = str(n.extras.getCharSequence(Notification.EXTRA_TITLE));
+        cancelPending(title, "you opened the chat");
+    }
+
+    private void cancelPending(String chat, String why) {
+        synchronized (pending) {
+            ScheduledFuture<?> f = pending.remove(chat);
+            if (f != null && f.cancel(false)) Store.log(this, "Cancelled reply to " + chat + " (" + why + ")");
+        }
     }
 
     private static Notification.Action findReplyAction(Notification n) {

@@ -43,6 +43,8 @@ public final class Store {
     public static String fromTime(Context c) { return prefs(c).getString("from", ""); }
     public static String toTime(Context c) { return prefs(c).getString("to", ""); }
     public static int maxPerHour(Context c) { return prefs(c).getInt("max_hour", 3); }
+    public static int delayMin(Context c) { return prefs(c).getInt("delay_min", 60); }
+    public static int delayMax(Context c) { return prefs(c).getInt("delay_max", 240); }
 
     // ---- schedule ----
     public static List<JSONObject> schedules(Context c) {
