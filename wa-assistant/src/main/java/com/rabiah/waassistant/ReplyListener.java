@@ -63,6 +63,18 @@ public class ReplyListener extends NotificationListenerService {
         boolean group = false;
         if (Build.VERSION.SDK_INT >= 28) group = ex.getBoolean(Notification.EXTRA_IS_GROUP_CONVERSATION, false);
 
+        // Names WhatsApp uses for the phone's owner (e.g. "You").
+        java.util.Set<String> selfNames = new java.util.HashSet<>();
+        selfNames.add("you");
+        CharSequence selfDisplay = ex.getCharSequence("android.selfDisplayName");
+        if (selfDisplay != null) selfNames.add(selfDisplay.toString().trim().toLowerCase(Locale.UK));
+        if (Build.VERSION.SDK_INT >= 28) {
+            Object mp = ex.get(Notification.EXTRA_MESSAGING_PERSON);
+            if (mp instanceof Person && ((Person) mp).getName() != null) {
+                selfNames.add(((Person) mp).getName().toString().trim().toLowerCase(Locale.UK));
+            }
+        }
+
         // Read the conversation from the MessagingStyle extras.
         List<String[]> history = new ArrayList<>();
         String lastText = null;
@@ -75,7 +87,9 @@ public class ReplyListener extends NotificationListenerService {
                 Bundle b = (Bundle) p;
                 String text = str(b.getCharSequence("text"));
                 String sender = senderName(b);
-                boolean fromMe = sender == null;
+                boolean fromMe = sender == null
+                        || selfNames.contains(sender.trim().toLowerCase(Locale.UK))
+                        || isOurReply(title, text);
                 String role = fromMe ? "assistant" : "user";
                 String content = (!fromMe && group) ? sender + ": " + text : text;
                 history.add(new String[]{role, content});
@@ -90,7 +104,7 @@ public class ReplyListener extends NotificationListenerService {
         }
         if (lastFromMe) { cancelPending(title, "you replied yourself"); return; }
         if (lastText.isEmpty()) return;
-        if (lastText.equals(lastSent.get(title))) return; // our own reply echoed back
+        if (isOurReply(title, lastText)) return; // our own reply echoed back
 
         String dedupKey = pkg + "|" + title + "|" + lastText + "|" + lastTime;
         synchronized (seen) {
@@ -127,8 +141,8 @@ public class ReplyListener extends NotificationListenerService {
                     return;
                 }
                 String text = Store.addTag(ctx) ? "🤖 " + reply : reply;
+                rememberSent(chat, text);
                 sendReply(ctx, action, text);
-                lastSent.put(chat, text);
                 recordReply(chat);
                 Store.log(ctx, "Replied to " + chat + ": " + text);
             } catch (Exception e) {
@@ -161,6 +175,33 @@ public class ReplyListener extends NotificationListenerService {
         synchronized (pending) {
             ScheduledFuture<?> f = pending.remove(chat);
             if (f != null && f.cancel(false)) Store.log(this, "Cancelled reply to " + chat + " (" + why + ")");
+        }
+    }
+
+    private static final Map<String, List<String>> sentHistory = new HashMap<>();
+
+    private static String norm(String s) {
+        return s == null ? "" : s.replaceAll("\\s+", " ").trim().toLowerCase(Locale.UK);
+    }
+
+    private static void rememberSent(String chat, String text) {
+        synchronized (sentHistory) {
+            List<String> l = sentHistory.get(chat);
+            if (l == null) { l = new ArrayList<>(); sentHistory.put(chat, l); }
+            l.add(norm(text));
+            String noTag = norm(text.replaceFirst("^🤖\\s*", ""));
+            l.add(noTag);
+            while (l.size() > 40) l.remove(0);
+        }
+        lastSent.put(chat, text);
+    }
+
+    private static boolean isOurReply(String chat, String text) {
+        String t = norm(text);
+        if (t.isEmpty()) return false;
+        synchronized (sentHistory) {
+            List<String> l = sentHistory.get(chat);
+            return l != null && l.contains(t);
         }
     }
 
